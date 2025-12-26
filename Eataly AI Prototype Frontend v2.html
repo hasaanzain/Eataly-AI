@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eataly AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Didot:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #000000;
+            color: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background-color: #CC333D;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(204, 51, 61, 0.3);
+        }
+
+        .header h1 {
+            font-family: 'Didot', serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            margin: 0;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 80px);
+            overflow: hidden;
+        }
+
+        .messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .message.bot {
+            background-color: #333333;
+            color: white;
+            border-left: 4px solid #CC333D;
+            align-self: flex-start;
+            margin-right: auto;
+        }
+
+        .message.user {
+            background-color: #666666;
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+
+        .welcome-message {
+            background-color: #333333;
+            color: white;
+            border-left: 4px solid #CC333D;
+            align-self: flex-start;
+            margin-right: auto;
+            max-width: 100%;
+        }
+
+        .prompt-suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+            padding: 0 20px;
+        }
+
+        .suggestion-btn {
+            background-color: #333333;
+            color: white;
+            border: 1px solid #CC333D;
+            padding: 8px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .suggestion-btn:hover {
+            background-color: #CC333D;
+            transform: translateY(-1px);
+        }
+
+        .input-container {
+            padding: 20px;
+            background-color: #111111;
+            border-top: 1px solid #333333;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            background-color: #222222;
+            border-radius: 25px;
+            padding: 5px;
+            border: 1px solid #444444;
+        }
+
+        .input-wrapper:focus-within {
+            border-color: #CC333D;
+            box-shadow: 0 0 0 2px rgba(204, 51, 61, 0.2);
+        }
+
+        #messageInput {
+            flex: 1;
+            background: none;
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            font-size: 16px;
+            outline: none;
+        }
+
+        #messageInput::placeholder {
+            color: #888888;
+        }
+
+        #sendBtn {
+            background-color: #CC333D;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #sendBtn:hover {
+            background-color: #aa2a35;
+        }
+
+        #sendBtn:disabled {
+            background-color: #666666;
+            cursor: not-allowed;
+        }
+
+        .typing-indicator {
+            display: none;
+            align-items: center;
+            gap: 5px;
+            color: #888888;
+            font-style: italic;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 3px;
+        }
+
+        .typing-dot {
+            width: 4px;
+            height: 4px;
+            background-color: #CC333D;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: 0s; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { opacity: 0.3; }
+            30% { opacity: 1; }
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .message {
+                max-width: 90%;
+                padding: 10px 14px;
+            }
+            
+            .suggestion-btn {
+                font-size: 13px;
+                padding: 6px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Eataly AI</h1>
+    </div>
+    
+    <div class="chat-container">
+        <div class="messages" id="messages">
+            <div class="message welcome-message">
+                Ciao! Welcome to Eataly! How can I help you today?
+            </div>
+        </div>
+        
+        <div class="prompt-suggestions" id="suggestions">
+            <button class="suggestion-btn" onclick="selectPrompt('What are some vegetarian options?')">vegetarian options</button>
+            <button class="suggestion-btn" onclick="selectPrompt('What is DOP and how is it different?')">about DOP</button>
+            <button class="suggestion-btn" onclick="selectPrompt('What does Pomodoro mean?')">italian terms</button>
+            <button class="suggestion-btn" onclick="selectPrompt('What wine pairs well with pasta?')">wine pairings</button>
+        </div>
+        
+        <div class="typing-indicator" id="typingIndicator">
+            <span>Eataly AI is thinking</span>
+            <div class="typing-dots">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <div class="input-wrapper">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="Ask Me Anything!" 
+                    autocomplete="off"
+                >
+                <button id="sendBtn" onclick="sendMessage()">
+                    ➤
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const messages = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const suggestions = document.getElementById('suggestions');
+
+        // Sample responses for different categories
+        const responses = {
+            vegetarian: [
+                "Here are some delicious vegetarian options at Eataly:\n\n• Margherita Pizza - Classic tomato, mozzarella, and fresh basil\n• Pasta Pomodoro - Fresh tomato sauce with basil\n• Eggplant Parmigiana - Layers of eggplant with tomato and mozzarella\n• Caprese Salad - Fresh mozzarella, tomatoes, and basil\n• Risotto ai Funghi - Creamy rice with mixed mushrooms\n\nWould you like to know about allergens or wine pairings for any of these dishes?"
+            ],
+            wine: [
+                "Great question about wine pairings! Here are some classic Italian combinations:\n\n• Pasta with tomato sauce → Chianti Classico\n• Seafood dishes → Pinot Grigio or Vermentino\n• Creamy pasta → Chardonnay or Soave\n• Pizza → Barbera d'Asti or Sangiovese\n• Aged cheese → Barolo or Brunello\n\nWhat specific dish are you looking to pair?"
+            ],
+            italian: [
+                "Here are some common Italian culinary terms:\n\n• **Pomodoro** - Tomato (literally means 'golden apple')\n• **Al dente** - Pasta cooked to be firm to the bite\n• **Antipasti** - Appetizers served before the meal\n• **Primo** - First course (usually pasta or risotto)\n• **Secondo** - Second course (meat or fish)\n• **Dolci** - Desserts\n• **Bruschetta** - Toasted bread with toppings\n\nNeed help with any specific term?"
+            ],
+            dop: [
+                "**DOP (Denominazione di Origine Protetta)** is Italy's highest quality certification for food products!\n\nKey points about DOP:\n• Protected designation of origin\n• Products must be produced in specific regions using traditional methods\n• Examples: Parmigiano-Reggiano, Prosciutto di Parma, Mozzarella di Bufala\n• Guarantees authenticity and quality\n• Similar to France's AOC system\n\nDOP ensures you're getting the real, traditional Italian product with verified origin and production methods."
+            ],
+            pork: [
+                "I'd be happy to help you check ingredients! Many Italian dishes do contain pork products:\n\n• **Common pork ingredients**: Pancetta, guanciale, prosciutto, sausage\n• **Dishes that typically contain pork**: Carbonara, Amatriciana, many ragù sauces\n• **Pork-free alternatives**: Cacio e pepe, Aglio e olio, Marinara sauce dishes\n\nWhich specific dish would you like me to check for pork content?"
+            ],
+            recommendation: [
+                "Based on your love for red sauce, I recommend:\n\n• **Pasta Arrabbiata** - Spicy tomato sauce with garlic and red peppers\n• **Penne all'Amatriciana** - Rich tomato sauce with pancetta and pecorino\n• **Lasagna della Casa** - Layers of pasta with meat sauce and cheese\n• **Pizza Marinara** - Simple but perfect tomato, garlic, and oregano\n• **Chicken Parmigiana** - Breaded chicken with marinara and mozzarella\n\nWould you like wine pairing suggestions for any of these?"
+            ]
+        };
+
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+            messageDiv.innerHTML = content.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            typingIndicator.style.display = 'flex';
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            typingIndicator.style.display = 'none';
+        }
+
+        function getResponse(userMessage) {
+            const msg = userMessage.toLowerCase();
+            
+            if (msg.includes('vegetarian') || msg.includes('vegan')) {
+                return responses.vegetarian[0];
+            }
+            if (msg.includes('wine') || msg.includes('pair')) {
+                return responses.wine[0];
+            }
+            if (msg.includes('dop') || msg.includes('protection') || msg.includes('origin')) {
+                return responses.dop[0];
+            }
+            if (msg.includes('pomodoro') || msg.includes('italian') || msg.includes('mean')) {
+                return responses.italian[0];
+            }
+            if (msg.includes('pork') || msg.includes('contain') || msg.includes('ingredient')) {
+                return responses.pork[0];
+            }
+            if (msg.includes('recommend') || msg.includes('red sauce') || msg.includes('suggestion')) {
+                return responses.recommendation[0];
+            }
+            if (msg.includes('hello') || msg.includes('hi') || msg.includes('ciao')) {
+                return "Ciao! I'm here to help you with any questions about our menu, ingredients, wine pairings, or Italian culinary terms. What would you like to know?";
+            }
+            
+            // Default responses for common queries
+            const defaultResponses = [
+                "That's a great question! While I don't have specific information about that right now, I can help you with menu options, ingredients, wine pairings, allergen information, and Italian culinary terms. What else can I assist you with?",
+                "I'd love to help you with that! For the most accurate information about specific dishes or policies, I recommend speaking with a manager. Meanwhile, I can help with general menu questions, wine pairings, or explain Italian terms.",
+                "Interesting question! I specialize in helping with Eataly's menu items, ingredients, wine recommendations, and Italian culinary knowledge. Is there something specific about our offerings I can help you with?"
+            ];
+            
+            return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
+        }
+
+        function selectPrompt(prompt) {
+            messageInput.value = prompt;
+            sendMessage();
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Hide suggestions after first message
+            if (suggestions.style.display !== 'none') {
+                suggestions.style.display = 'none';
+            }
+
+            // Add user message
+            addMessage(message, true);
+            messageInput.value = '';
+            sendBtn.disabled = true;
+
+            // Show typing indicator
+            showTypingIndicator();
+
+            // Simulate AI thinking time
+            await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 1000));
+
+            // Hide typing indicator and show response
+            hideTypingIndicator();
+            const response = getResponse(message);
+            addMessage(response, false);
+
+            sendBtn.disabled = false;
+            messageInput.focus();
+        }
+
+        // Event listeners
+        messageInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        messageInput.addEventListener('input', function() {
+            sendBtn.disabled = this.value.trim() === '';
+        });
+
+        // Focus input on load
+        window.addEventListener('load', function() {
+            messageInput.focus();
+        });
+
+        // Auto-resize on mobile
+        window.addEventListener('resize', function() {
+            messages.scrollTop = messages.scrollHeight;
+        });
+    </script>
+</body>
+</html>
