@@ -1,0 +1,50 @@
+import streamlit as st
+
+from chatbot import chatbot, build_vectordb_from_folder, get_llm
+
+st.set_page_config(page_title="Eataly AI")
+st.title("Eataly AI")
+
+KB_FOLDER = "eataly_ai_knowledge_base"
+
+@st.cache_resource
+def load_vectordb():
+    return build_vectordb_from_folder(KB_FOLDER)
+
+@st.cache_resource
+def load_llm():
+    return get_llm()
+
+vectordb = load_vectordb()
+llm = load_llm()
+
+# Initialize chat history with assistant greeting
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+        {"role": "assistant", "content": "Ciao! Welcome to Eataly! How can I help you today?"}
+    ]
+
+# Display existing messages
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+prompt = st.chat_input("Ask about menus, HR policies, wines, procedures...")
+
+if prompt:
+    # Add user message to chat history
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Generate and display assistant response
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                response = chatbot(prompt, vectordb=vectordb, k=4, llm=llm)
+                st.markdown(response)
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                st.error(error_msg)
+                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
