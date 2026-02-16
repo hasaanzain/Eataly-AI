@@ -2,7 +2,7 @@ import streamlit as st
 
 from pathlib import Path
 
-from z import chatbot_stream, get_vectordb, get_llm
+from chatbot import chatbot_stream, get_vectordb, get_llm
 
 st.set_page_config(page_title="Eataly AI")
 st.title("Eataly AI")
