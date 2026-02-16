@@ -1,15 +1,17 @@
 import streamlit as st
 
-from chatbot import chatbot, build_vectordb_from_folder, get_llm
+from pathlib import Path
+
+from z import chatbot_stream, get_vectordb, get_llm
 
 st.set_page_config(page_title="Eataly AI")
 st.title("Eataly AI")
 
-KB_FOLDER = "eataly_ai_knowledge_base"
+path = Path("eataly_ai_knowledge_base")
 
 @st.cache_resource
 def load_vectordb():
-    return build_vectordb_from_folder(KB_FOLDER)
+    return get_vectordb(path)
 
 @st.cache_resource
 def load_llm():
@@ -29,7 +31,12 @@ for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-prompt = st.chat_input("Ask about menus, HR policies, wines, procedures...")
+prompt = st.chat_input("Ask me about menus, HR policies, wines, procedures...")
+
+
+
+
+
 
 if prompt:
     # Add user message to chat history
@@ -41,8 +48,7 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                response = chatbot(prompt, vectordb=vectordb, k=4, llm=llm)
-                st.markdown(response)
+                response = st.write_stream(chatbot_stream(prompt, vectordb=vectordb, k=4, llm=llm))
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
             except Exception as e:
                 error_msg = f"Error: {str(e)}"
