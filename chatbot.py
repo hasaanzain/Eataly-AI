@@ -8,50 +8,88 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
 
 load_dotenv()
 
-def build_vectordb_from_folder(folder_path: str):
-    folder = Path(folder_path)
 
-    file_names = [f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() == ".pdf"]
+from pathlib import Path
+path = Path("eataly_ai_knowledge_base")
 
-    loaded_docs = []
+
+def get_doc_names(path):
+    file_names = []         
+    for file in path.rglob("*"):    
+        if file.is_file():        
+            if file.suffix.lower() == ".pdf":   
+                file_names.append(file)        
+    return file_names          
+
+
+def load_docs(file):
+    loader = PyPDFLoader(str(file))
+    return loader.load() 
+
+
+
+def get_text(file_names):
+    corpus = []
     for file in file_names:
-        loader = PyPDFLoader(str(file))
-        loaded_docs.extend(loader.load())
+        corpus.extend(load_docs(file))
+    return corpus
 
+
+
+def get_chunks(corpus):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=512,
         chunk_overlap=50,
         length_function=len,
         separators=["\n\n", "\n", "  ", " ", ""],
     )
+    return splitter.split_documents(corpus)
 
-    chunk_docs = splitter.split_documents(loaded_docs)
-    ids = [str(i) for i in range(len(chunk_docs))]
 
-    embedding_model = OpenAIEmbeddings(model="text-embedding-3-large")
 
+def build_vectordb(chunks):
+    embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+    ids = [str(i) for i in range(0, len(chunks))]
     vectordb = Chroma.from_documents(
-        documents=chunk_docs,
+        documents=chunks,
         embedding=embedding_model,
-        ids=ids,
+        ids=ids
     )
     return vectordb
 
-def get_llm():
-    return ChatOpenAI(model="gpt-5-nano", temperature=0.6)
 
-def chatbot(query, vectordb, k=4, llm=None):
+
+def get_llm():
+    # streaming=True enables llm.stream(...)
+    return ChatOpenAI(model="gpt-5-nano", temperature=0.6, streaming=True)
+
+
+def get_vectordb(path):
+    file_names = get_doc_names(path)
+    corpus = get_text(file_names)
+    chunks = get_chunks(corpus)
+    vectordb = build_vectordb(chunks)
+    return vectordb
+
+
+def chatbot_stream(query, vectordb=None, k=3, llm=None):
     if llm is None:
         llm = get_llm()
 
-    retriever = vectordb.as_retriever(search_kwargs={"k": k})
-    docs = retriever.invoke(query)
-    context = "\n\n".join([doc.page_content for doc in docs])
+    if vectordb is None:
+        vectordb = get_vectordb(path)
 
-    prompt_template = ChatPromptTemplate.from_template("""
+    retriever = vectordb.as_retriever(search_kwargs={"k": k})
+    retrieved_docs = retriever.invoke(query)
+    context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+
+    prompt_template = ChatPromptTemplate.from_template(
+        """
 You are a friendly and helpful bot designed to help out the workers of the italian restaurant Eataly.
 You are only responding to staff and not any customer inquiries.
 Use full english sentences to answer.
@@ -63,8 +101,11 @@ You cannot place any orders or check availability for dishes.
 CONTEXT: {context}
 QUESTION: {question}
 Answer:
-""")
+"""
+    )
 
-    formatted_prompt = prompt_template.invoke({"context": context, "question": query})
-    response = llm.invoke(formatted_prompt)
-    return response.content
+    chain = prompt_template | llm | StrOutputParser()
+    return chain.stream({"context": context, "question": query})
+
+
+
