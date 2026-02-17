@@ -1,5 +1,5 @@
 import streamlit as st
-
+from langsmith import traceable
 from pathlib import Path
 
 from chatbot import chatbot_stream, get_vectordb, get_llm
@@ -31,11 +31,11 @@ for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-prompt = st.chat_input("Ask me about menus, HR policies, wines, procedures...")
+@traceable
+def get_query():
+    return st.chat_input("Ask me about menus, HR policies, wines, procedures...")
 
-
-
-
+prompt = get_query()
 
 
 if prompt:
