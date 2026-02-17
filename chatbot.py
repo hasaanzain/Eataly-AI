@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from dotenv import load_dotenv
-
+from langsmith import traceable
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
@@ -51,7 +51,7 @@ def get_chunks(corpus):
     return splitter.split_documents(corpus)
 
 
-
+@traceable
 def build_vectordb(chunks):
     embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
     ids = [str(i) for i in range(0, len(chunks))]
@@ -68,7 +68,7 @@ def get_llm():
     # streaming=True enables llm.stream(...)
     return ChatOpenAI(model="gpt-5-nano", temperature=0.6, streaming=True, reasoning_effort='low')
 
-
+@traceable
 def get_vectordb(path):
     file_names = get_doc_names(path)
     corpus = get_text(file_names)
@@ -76,7 +76,7 @@ def get_vectordb(path):
     vectordb = build_vectordb(chunks)
     return vectordb
 
-
+@traceable
 def chatbot_stream(query, vectordb=None, k=3, llm=None):
     if llm is None:
         llm = get_llm()
