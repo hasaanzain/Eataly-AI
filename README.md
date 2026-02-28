@@ -1,2 +1,2 @@
 # Start interacting with the LLM at 
-www.eataly-ai.streamlit.app
+https://eataly-ai.streamlit.app/
