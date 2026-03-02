@@ -4,6 +4,8 @@ Internal Retrieval-Augmented Generation (RAG) Assistant for Eataly Staff
 
 Eataly AI is a Streamlit-based internal chatbot that helps staff access operational, HR, menu, wine, and procedural information from internal PDF documentation. The system uses a Retrieval-Augmented Generation pipeline built with LangChain, Chroma, and OpenAI models.
 
+All code contained is proprietary and IP of Hasaan Mohsin.
+
 ---
 
 ## Features
@@ -48,58 +50,17 @@ Eataly AI is a Streamlit-based internal chatbot that helps staff access operatio
 
 ---
 
-## ⚙️ Installation
+## Use the chatbot!
 
-### 1. Clone Repository
-
-```
-git clone https://github.com/yourusername/eataly-ai.git
-cd eataly-ai
-```
-
-### 2. Create Virtual Environment
+### Access the app directly via
 
 ```
-python -m venv venv
-source venv/bin/activate     # macOS/Linux
-venv\Scripts\activate        # Windows
-```
-
-### 3. Install Dependencies
-
-```
-pip install -r requirements.txt
+https://eataly-ai.streamlit.app/
 ```
 
 ---
 
-## 🔐 Environment Variables
-
-Create a `.env` file:
-
-```
-OPENAI_API_KEY=your_openai_api_key
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=your_langsmith_key
-```
-
----
-
-## ▶️ Run the App
-
-```
-streamlit run streamlit.py
-```
-
-App runs at:
-
-```
-http://localhost:8501
-```
-
----
-
-## 🛠 Configuration
+## Configuration
 
 * Adjust chunking in `get_chunks()`
 * Modify retrieval depth with `k` in `chatbot_stream()`
@@ -107,7 +68,7 @@ http://localhost:8501
 
 ---
 
-## 🛡️ Safety Design
+## Safety Design
 
 The assistant is restricted to staff use and enforces:
 
@@ -118,7 +79,7 @@ The assistant is restricted to staff use and enforces:
 
 ---
 
-## 📈 Observability
+## Observability
 
 LangSmith tracing is enabled via `@traceable` decorators for debugging and monitoring.
 
