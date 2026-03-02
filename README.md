@@ -6,7 +6,7 @@ Eataly AI is a Streamlit-based internal chatbot that helps staff access operatio
 
 ---
 
-## 🚀 Features
+## Features
 
 * PDF knowledge base ingestion
 * Semantic search using OpenAI embeddings
@@ -18,11 +18,10 @@ Eataly AI is a Streamlit-based internal chatbot that helps staff access operatio
   * No employee personal data disclosure
   * No order placement or availability checks
   * Escalation for out-of-scope queries
-  * Italian word translation support
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 1. Load PDFs from `eataly_ai_knowledge_base/`
 2. Split into overlapping chunks (512 size, 50 overlap)
@@ -31,6 +30,7 @@ Eataly AI is a Streamlit-based internal chatbot that helps staff access operatio
 5. Retrieve top-k relevant chunks
 6. Generate response with `gpt-5-nano`
 7. Stream output in Streamlit UI
+8. Deployed on streamlit community cloud
 
 ---
 
