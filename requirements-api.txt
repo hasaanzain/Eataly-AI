@@ -1,0 +1,16 @@
+# Runtime dependencies for the FastAPI app in the Docker image.
+# requirements.txt stays as-is for the Streamlit Cloud deployment.
+fastapi==0.160.0
+uvicorn==0.40.0
+python-dotenv==1.2.1
+langchain-core==1.2.13
+langchain-community==0.4.1
+langchain-text-splitters==1.1.0
+langchain-chroma==1.1.0
+langchain-openai==1.1.9
+langsmith==0.7.3
+chromadb==1.5.0
+openai==2.21.0
+tiktoken==0.12.0
+pypdf==6.7.0
+boto3>=1.35,<2

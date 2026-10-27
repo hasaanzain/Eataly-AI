@@ -7,7 +7,7 @@ Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: internet -> ALB:80 (AllowedCidr only) -> Fargate task :8501 (public IP, no NAT) -> OpenAI/S3/ECR over 443
+    arch: internet -> ALB:80 (AllowedCidr) -> Fargate task :8501 FastAPI (serves UI + /api; public IP, no NAT) -> OpenAI/S3/ECR over 443
     must:
       - cluster, service, task family and container all named eataly-ai; deploy workflow + deploy role depend on it
       - GitHub Actions registers new task-definition revisions outside CFN; pass the currently deployed ImageTag on stack updates or the image rolls back
@@ -33,7 +33,7 @@ Parameters:
   AllowedCidr:
     Type: String
     AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
-    Description: Who may open the app (e.g. your IP as x.x.x.x/32). There is no login, so keep this narrow.
+    Description: Who may open the app. 0.0.0.0/0 = everyone (owner decision; no login, API rate-limits per IP)
   ImageTag:
     Type: String
     AllowedPattern: "^[A-Za-z0-9_.-]{1,128}$"
@@ -129,9 +129,10 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: HTTP only because there is no domain/certificate yet; ingress limited to AllowedCidr since the app has no login
+        why: HTTP only because there is no domain/certificate yet. Owner chose public access with no login (docs are public);
+          abuse/cost is limited by per-IP + daily rate limits in backend/app.py
         must:
-          - do not open to 0.0.0.0/0 until HTTPS + Cognito auth are in place
+          - keep the backend rate limits in place while this is open to 0.0.0.0/0
     Properties:
       GroupDescription: Eataly AI load balancer - HTTP from allowed CIDR
       VpcId: !Ref VpcId
@@ -200,13 +201,15 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: Streamlit health endpoint; sticky sessions keep a browser's websocket on one task if scaled past 1
+        why: /api/health returns 503 until the PDF index is built, so traffic only reaches a warm task; sticky sessions keep a browser on one task if scaled past 1
+        must:
+          - path must match backend/app.py health route
     Properties:
       VpcId: !Ref VpcId
       TargetType: ip
       Protocol: HTTP
       Port: 8501
-      HealthCheckPath: /_stcore/health
+      HealthCheckPath: /api/health
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 3
@@ -236,7 +239,8 @@ Resources:
     DependsOn: HttpListener
     Metadata:
       com.aws.cloudformation.Context:
-        why: public IP instead of NAT gateway (~$35/mo saved); circuit breaker rolls back deploys that never get healthy
+        why: public IP instead of NAT gateway (~$35/mo saved); circuit breaker rolls back deploys that never get healthy;
+          600s grace covers S3 download + embedding of the PDFs at startup
         must:
           - name eataly-ai (deploy workflow + deploy role ARN)
     Properties:
@@ -245,7 +249,7 @@ Resources:
       LaunchType: FARGATE
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
-      HealthCheckGracePeriodSeconds: 120
+      HealthCheckGracePeriodSeconds: 600
       DeploymentConfiguration:
         MinimumHealthyPercent: 100
         MaximumPercent: 200

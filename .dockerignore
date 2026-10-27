@@ -5,8 +5,12 @@ venv
 __pycache__
 *.pyc
 .env
-.streamlit/secrets.toml
+.streamlit
+streamlit_app.py
+requirements.txt
 eataly_ai_knowledge_base
 chroma_db
+feedback
 docs
+infra
 *.md
