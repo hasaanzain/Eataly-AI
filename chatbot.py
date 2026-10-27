@@ -1,5 +1,6 @@
 # chatbot.py
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 from langsmith import traceable
@@ -14,8 +15,27 @@ from langchain_core.output_parsers import StrOutputParser
 load_dotenv()
 
 
-from pathlib import Path
 path = Path("eataly_ai_knowledge_base")
+
+
+def sync_knowledge_base_from_s3(path):
+    # In AWS the PDFs live in a private S3 bucket, e.g. KNOWLEDGE_BASE_S3_URI=s3://my-bucket/documents/
+    # Locally the variable is unset and the existing folder is used as-is.
+    s3_uri = os.getenv("KNOWLEDGE_BASE_S3_URI")
+    if not s3_uri:
+        return
+    import boto3
+
+    bucket, _, prefix = s3_uri.removeprefix("s3://").partition("/")
+    s3 = boto3.client("s3")
+    path.mkdir(parents=True, exist_ok=True)
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.lower().endswith(".pdf"):
+                target = path / Path(key).relative_to(prefix) if prefix else path / key
+                target.parent.mkdir(parents=True, exist_ok=True)
+                s3.download_file(bucket, key, str(target))
 
 
 def get_doc_names(path):
@@ -70,6 +90,7 @@ def get_llm():
 
 @traceable
 def get_vectordb(path):
+    sync_knowledge_base_from_s3(path)
     file_names = get_doc_names(path)
     corpus = get_text(file_names)
     chunks = get_chunks(corpus)

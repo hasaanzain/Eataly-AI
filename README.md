@@ -51,7 +51,7 @@ https://eataly-ai.streamlit.app/
 ```
 .
 ├── chatbot.py
-├── streamlit.py
+├── streamlit_app.py
 ├── eataly_ai_knowledge_base/
 ├── .env
 ├── requirements.txt

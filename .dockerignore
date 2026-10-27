@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.env
+.streamlit/secrets.toml
+eataly_ai_knowledge_base
+chroma_db
+docs
+*.md

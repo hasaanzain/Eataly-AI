@@ -17,3 +17,9 @@ venv/
 
 # Chroma / vector DB (optional)
 chroma_db/
+
+# Secrets and generated data (the PDFs in eataly_ai_knowledge_base/ are tracked on purpose;
+# Streamlit Cloud reads them from the repo, AWS reads its copy from S3)
+.streamlit/secrets.toml
+feedback/
+indexes/

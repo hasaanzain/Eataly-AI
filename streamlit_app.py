@@ -119,7 +119,9 @@ if prompt:
                     print(f"Query logging failed: {log_error}")
 
             except Exception as e:
-                error_msg = f"Error: {str(e)}"
+                # Full details go to the logs (CloudWatch in AWS); users get a generic message.
+                print(f"Chat request failed: {e!r}")
+                error_msg = "Sorry, something went wrong. Please try again or ask a manager."
                 st.error(error_msg)
 
                 st.session_state.chat_history.append(

@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Eataly AI foundation - long-lived storage, image registry, secrets and IAM roles. Kept separate from
+  the app stack so the billable runtime can be deleted and recreated without losing documents or keys.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: GitHub Actions (OIDC) -> ECR image -> ECS Fargate (app.yaml) reads PDFs from S3 + keys from Secrets Manager
+    must:
+      - no long-lived AWS access keys anywhere; CI uses OIDC role only
+      - secret values entered by a human in the console; never in template, params or logs
+    ref:
+      - at: docs/aws-setup.md
+        has: deploy + teardown runbook
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: hasaanzain/Eataly-AI
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: owner/repo allowed to deploy (case-sensitive, must match GitHub exactly)
+  GitHubBranch:
+    Type: String
+    Default: main
+    AllowedPattern: "^[A-Za-z0-9_./-]+$"
+    Description: Only pushes/dispatches on this branch may assume the deploy role
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set false if the account already has the token.actions.githubusercontent.com provider
+
+Conditions:
+  MakeOidcProvider: !Equals [!Ref CreateGitHubOidcProvider, "true"]
+
+Resources:
+  # ---------- Secrets ----------
+  SecretsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: dedicated CMK for app secret; usage limited to Secrets Manager via kms:ViaService in role policies
+        must:
+          - keep root-account admin statement (prevents key lockout)
+    Properties:
+      Description: Encrypts the Eataly AI application secret
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  SecretsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/eataly-ai-secrets
+      TargetKeyId: !Ref SecretsKey
+
+  AppSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: OpenAI + LangSmith keys injected into the container as env vars by ECS; no rotation (third-party keys cannot be rotated by AWS)
+        must:
+          - never change SecretString in this template; doing so overwrites the real keys entered in the console
+        mutable: review-required
+    Properties:
+      Name: eataly-ai/app
+      Description: Eataly AI API keys - edit values in the console, never in the template
+      KmsKeyId: !Ref SecretsKey
+      SecretString: '{"OPENAI_API_KEY":"REPLACE_ME","LANGSMITH_API_KEY":"REPLACE_ME"}'
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  # ---------- Storage ----------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: documents/ (PDF knowledge base), later feedback/ and indexes/; versioning lets a bad upload be rolled back
+        must:
+          - stays private; app reads via task role only
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub ${DataBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ---------- Images & logs ----------
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: images are rebuildable from git, so EmptyOnDelete lets teardown succeed
+        must:
+          - name referenced by .github/workflows/deploy.yml (ECR_REPOSITORY)
+          - IMMUTABLE tags; CI tags by git SHA
+    Properties:
+      RepositoryName: eataly-ai
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 30 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":30},"action":{"type":"expire"}}]}
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/eataly-ai
+      RetentionInDays: 30
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  # ---------- Runtime roles ----------
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: used by the ECS agent (not app code) to pull image, write logs, inject the secret
+    Properties:
+      Description: ECS agent role for Eataly AI - image pull, logs, secret injection
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-app-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AppSecret
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !GetAtt SecretsKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub secretsmanager.${AWS::Region}.amazonaws.com
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: assumed by the app code (boto3); least privilege on the data bucket prefixes it actually uses
+    Properties:
+      Description: Eataly AI app role - read documents and indexes, write feedback
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: data-bucket-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: ["documents/*", "indexes/*"]
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub ${DataBucket.Arn}/documents/*
+                  - !Sub ${DataBucket.Arn}/indexes/*
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${DataBucket.Arn}/feedback/*
+
+  # ---------- CI/CD (GitHub Actions via OIDC) ----------
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: short-lived creds for the deploy workflow; scoped to one repo + branch
+        must:
+          - sub condition must stay pinned to repo+branch; widening lets any repo/fork deploy
+          - service ARN assumes cluster and service are both named eataly-ai (app.yaml)
+    Properties:
+      Description: Assumed by GitHub Actions to push images and roll the ECS service
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - MakeOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:ref:refs/heads/${GitHubBranch}
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                Resource: !GetAtt ImageRepository.Arn
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeTaskDefinition
+                  - ecs:RegisterTaskDefinition
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/eataly-ai/eataly-ai
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt TaskExecutionRole.Arn
+                  - !GetAtt TaskRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+
+Outputs:
+  DataBucketName:
+    Description: Private bucket for documents/, feedback/, indexes/
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-DataBucketName
+  AppSecretArn:
+    Description: Secret holding OPENAI_API_KEY and LANGSMITH_API_KEY
+    Value: !Ref AppSecret
+    Export:
+      Name: !Sub ${AWS::StackName}-AppSecretArn
+  RepositoryUri:
+    Description: ECR repository URI
+    Value: !GetAtt ImageRepository.RepositoryUri
+    Export:
+      Name: !Sub ${AWS::StackName}-RepositoryUri
+  LogGroupName:
+    Description: CloudWatch log group for the app
+    Value: !Ref AppLogGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-LogGroupName
+  TaskExecutionRoleArn:
+    Description: ECS task execution role
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-TaskExecutionRoleArn
+  TaskRoleArn:
+    Description: ECS task (app) role
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-TaskRoleArn
+  GitHubDeployRoleArn:
+    Description: Put this in the GitHub secret AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubDeployRole.Arn
