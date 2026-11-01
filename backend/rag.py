@@ -124,31 +124,42 @@ def is_fallback(answer):
     return "beyond the scope of my knowledge" in answer.lower()
 
 
-MAX_SOURCES = 2
+MAX_SOURCES = 3
+
+
+def source_key(doc):
+    # The file a citation opens: the printed menu for menu records, the PDF itself for chunks.
+    md = doc.metadata
+    if md.get("source_type") == "menu_record":
+        return md.get("source_file") or md.get("name")
+    return Path(md.get("source", "")).name or None
+
+
+def cited_docs(docs, limit=MAX_SOURCES):
+    # The documents shown as citations: the first, best-ranked match from each file, in retrieval order,
+    # at most `limit`. Two dishes from the same printed menu or two pages of the same PDF never show as
+    # separate sources. The answer itself still uses every retrieved document.
+    chosen, seen = [], set()
+    for doc in docs:
+        key = source_key(doc)
+        if key and key not in seen:
+            seen.add(key)
+            chosen.append(doc)
+            if len(chosen) == limit:
+                break
+    return chosen
 
 
 def to_sources(docs, snippet_chars=200, limit=MAX_SOURCES):
-    # One chip per document page, in retrieval order, at most `limit` (the answer still uses every
-    # retrieved document). Titles and pages come only from loader metadata; nothing is invented.
-    sources, seen = [], set()
-    for doc in docs:
-        if len(sources) >= limit:
-            break
+    # One chip per cited document. Titles and pages come only from loader metadata; nothing is invented.
+    sources = []
+    for doc in cited_docs(docs, limit):
         if doc.metadata.get("source_type") == "menu_record":
-            source = menu_source(doc, snippet_chars)
-            if (source["title"], source["page"]) not in seen:
-                seen.add((source["title"], source["page"]))
-                sources.append(source)
+            sources.append(menu_source(doc, snippet_chars))
             continue
-        filename = Path(doc.metadata.get("source", "")).name
-        if not filename:
-            continue
+        filename = source_key(doc)
         page_index = doc.metadata.get("page")
         page = doc.metadata.get("page_label") or (page_index + 1 if isinstance(page_index, int) else None)
-        key = (filename, page)
-        if key in seen:
-            continue
-        seen.add(key)
         url = f"/api/documents/{quote(filename)}"
         if isinstance(page_index, int):
             url += f"#page={page_index + 1}"

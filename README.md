@@ -24,7 +24,8 @@ http://eataly-LoadB-Im6ruFOAYdDe-1295347466.ca-central-1.elb.amazonaws.com
 * Semantic search using OpenAI embeddings
 * GPT-powered contextual responses
 * Real-time streaming responses
-* Source chips under every grounded answer (document + page, opens the PDF)
+* Up to 3 source chips under every grounded answer, one per document (document + page, opens the PDF)
+* Works on phones: conversation drawer, iPhone notch/home-bar spacing, text box stays above the keyboard
 * Every question and thumbs up/down rating logged to S3, queryable with Athena
 * Follow-up questions use recent conversation history
 * Built-in guardrails:

@@ -97,8 +97,8 @@ def answer_and_grade(case, docs, llm, judge):
     answer = (llm | StrOutputParser()).invoke(rag.build_messages(case["question"], [], docs))
     generation_ms = (time.monotonic() - started) * 1000
     grounded = bool(answer.strip()) and not rag.is_fallback(answer)
-    # The app shows the first rag.MAX_SOURCES retrieved sources under a grounded answer, so those are the citations.
-    cited = list(dict.fromkeys(doc_key(d) for d in docs))[:rag.MAX_SOURCES] if grounded else []
+    # Same choice as the app's source chips under a grounded answer.
+    cited = [doc_key(d) for d in rag.cited_docs(docs)] if grounded else []
     grade = judge.invoke(JUDGE_PROMPT.format(
         category=case["category"], question=case["question"], expected=case["expected_answer"],
         notes=case["evaluation_notes"] or "none", answer=answer))

@@ -78,9 +78,20 @@ def test_duplicate_menu_items_cited_once():
     assert len(rag.to_sources([menu_doc(), menu_doc()])) == 1
 
 
-def test_at_most_two_sources_in_retrieval_order():
-    docs = [menu_doc(name="Carbonara Classica"), menu_doc(name="Cacio e Pepe"), pdf_doc(), menu_doc(name="Amatriciana")]
-    assert [s["title"].split(" · ")[0] for s in rag.to_sources(docs)] == ["Carbonara Classica", "Cacio e Pepe"]
+def pdf_page(name, page):
+    return Document(page_content="text", metadata={
+        "source_type": "pdf", "source": f"kb/{name}.pdf", "document_title": name, "page": page - 1, "page_number": page})
+
+
+def test_at_most_three_sources_each_from_a_different_file():
+    docs = [menu_doc(name="Carbonara Classica"),
+            menu_doc(name="Cacio e Pepe"),                       # same printed menu as the carbonara
+            pdf_page("Wine Service", 3), pdf_page("Wine Service", 5),  # same PDF, another page
+            menu_doc(name="Tiramisu", source_file="Dessert Menu.pdf"),
+            pdf_page("Steps of Service", 1)]
+    sources = rag.to_sources(docs)
+    assert [(s["title"].split(" · ")[0], s["page"]) for s in sources] == [
+        ("Carbonara Classica", "2"), ("Wine Service", "3"), ("Tiramisu", "2")]
 
 
 def test_context_labels_each_source():
