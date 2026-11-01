@@ -6,10 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements-api.txt .
-RUN pip install -r requirements-api.txt
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-COPY chatbot.py ./
 COPY backend/ backend/
 COPY frontend/ frontend/
 
@@ -17,7 +16,7 @@ COPY frontend/ frontend/
 RUN useradd --create-home appuser && chown -R appuser /app
 USER appuser
 
-# Port 8501 is kept from the Streamlit setup so the load balancer and task definition stay unchanged.
+# Port 8501 matches the load balancer target group and task definition in infra/aws/app.yaml.
 EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=600s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/api/health')"

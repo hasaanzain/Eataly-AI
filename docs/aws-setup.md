@@ -8,8 +8,10 @@ Browser ──HTTP──▶ Application Load Balancer (open to everyone, no logi
                         ▼
                   ECS Fargate task: FastAPI (backend/app.py) on port 8501
                         ├─ serves the UI (frontend/index.html) and /api/*
-                        ├─ downloads PDFs from S3 documents/ and indexes them at startup
-                        ├─ writes feedback to S3 feedback/YYYY/MM/DD/<uuid>.json
+                        ├─ downloads PDFs + menu JSON from S3 documents/ and indexes them at startup
+                        ├─ logs every question to S3 queries/YYYY/MM/DD/<message_id>.json
+                        ├─ writes ratings to S3 feedback/YYYY/MM/DD/<message_id>.json
+                        │     (both readable with Athena: database eataly_ai, workgroup eataly-ai)
                         ├─ API keys injected from Secrets Manager (eataly-ai/app)
                         └─ logs to CloudWatch (/ecs/eataly-ai)
 
@@ -22,7 +24,7 @@ Region: `ca-central-1`. AWS CLI profile: `hasaan` (sign in with `aws login --pro
 
 | Stack | Template | What it holds | Cost |
 |---|---|---|---|
-| `eataly-ai-foundation` | [infra/aws/foundation.yaml](../infra/aws/foundation.yaml) | Private S3 bucket, ECR repo, secret + KMS key, log group, container roles, GitHub deploy role (OIDC) | ~$1-2/month |
+| `eataly-ai-foundation` | [infra/aws/foundation.yaml](../infra/aws/foundation.yaml) | Private S3 bucket, ECR repo, secret + KMS key, log group, container roles, GitHub deploy role (OIDC), Athena tables + workgroup for the question log | ~$1-2/month |
 | `eataly-ai-app` | [infra/aws/app.yaml](../infra/aws/app.yaml) | ECS cluster/service/task definition, load balancer, security groups, health alarm | ~$60-80/month |
 
 The foundation stack is long-lived. The app stack can be deleted to stop paying and recreated later.
@@ -41,10 +43,10 @@ Current values:
 
 **Deploy code changes**: push to `main`. The workflow builds the image, pushes it to ECR, and rolls the service. The new task only receives traffic after `/api/health` returns 200 (PDFs indexed); if it never gets healthy, ECS rolls back automatically. Watch it under the repo's Actions tab.
 
-**Update the PDFs**:
+**Update the PDFs or menu JSON**:
 
 ```bash
-aws s3 sync eataly_ai_knowledge_base/ s3://eataly-ai-foundation-databucket-fs1wcpnicpyp/documents/ --delete --profile hasaan
+aws s3 sync eataly_ai_knowledge_base/ s3://eataly-ai-foundation-databucket-fs1wcpnicpyp/documents/ --delete --exclude "*.DS_Store" --profile hasaan
 aws ecs update-service --cluster eataly-ai --service eataly-ai --force-new-deployment --profile hasaan
 ```
 
@@ -52,13 +54,30 @@ The restarted task re-downloads and re-indexes everything before taking traffic 
 
 **Change API keys**: edit `eataly-ai/app` in Secrets Manager, then run the `--force-new-deployment` command above.
 
-**Read feedback**:
+**Read questions and feedback**: open the Athena console (ca-central-1), pick workgroup `eataly-ai` (top right)
+and database `eataly_ai`. The *Saved queries* tab has four ready-made queries:
 
-```bash
-aws s3 ls s3://eataly-ai-foundation-databucket-fs1wcpnicpyp/feedback/ --recursive --profile hasaan
-```
+| Saved query | Shows |
+|---|---|
+| Recent questions (last 7 days) | every question, the rewritten search query, route, answer, latency |
+| Rated answers with retrieval | latest thumbs up/down per answer, joined to what retrieval returned |
+| Unanswered questions (last 30 days) | fallback answers and errors: gaps in the knowledge base |
+| Daily usage | questions per day, fallback rate, median latency |
 
-Each file holds the question, answer, cited documents/pages, rating and conversation id. No names or personal data are collected.
+Two tables, linked by `message_id`:
+
+- `queries`: one row per question (`question`, `search_query`, `route`, `answer`, `fallback`, `status`,
+  `citations`, `retrieved` with ids and scores, `latency_ms`, `conversation_id`, `topic`).
+- `feedback`: one row per rating click (`rating`, `comment`, `question`, `answer`, `citations`). A second click
+  on the same day replaces the first; use the latest `created_at` per `message_id`.
+
+Both are partitioned by day as `dt` (`'2026/11/01'`); filter on it (`WHERE dt >= '2026/11/01'`) so Athena only
+reads those days. Athena costs about $5 per TB scanned, so normal use is fractions of a cent; each query is
+capped at 1 GB. Results are kept in `athena-results/` for 30 days. Questions and feedback are kept until deleted.
+No names, emails or IP addresses are stored, but staff may type personal details into a question, so treat the
+bucket as internal data.
+
+The raw files are one-line JSON, e.g. `aws s3 cp s3://<bucket>/queries/2026/11/01/<message_id>.json - --profile hasaan`.
 
 **See logs/errors**: CloudWatch, log group `/ecs/eataly-ai`, or `aws logs tail /ecs/eataly-ai --follow --profile hasaan`.
 

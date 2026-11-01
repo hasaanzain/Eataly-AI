@@ -94,9 +94,10 @@ Resources:
     UpdateReplacePolicy: Retain
     Metadata:
       com.aws.cloudformation.Context:
-        why: documents/ (PDF knowledge base), later feedback/ and indexes/; versioning lets a bad upload be rolled back
+        why: documents/ (knowledge base), queries/ + feedback/ (one-line JSON read by the Athena tables below), athena-results/ (query output, expires after 30 days); versioning lets a bad upload be rolled back
         must:
           - stays private; app reads via task role only
+          - queries/ and feedback/ hold staff questions; never make them public
     Properties:
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -118,6 +119,10 @@ Resources:
             Status: Enabled
             NoncurrentVersionExpiration:
               NoncurrentDays: 90
+          - Id: expire-athena-results
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 30
       Tags:
         - Key: app
           Value: eataly-ai
@@ -214,7 +219,7 @@ Resources:
       com.aws.cloudformation.Context:
         why: assumed by the app code (boto3); least privilege on the data bucket prefixes it actually uses
     Properties:
-      Description: Eataly AI app role - read documents and indexes, write feedback
+      Description: Eataly AI app role - read documents and indexes, write query logs and feedback
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -243,7 +248,207 @@ Resources:
                   - !Sub ${DataBucket.Arn}/indexes/*
               - Effect: Allow
                 Action: s3:PutObject
-                Resource: !Sub ${DataBucket.Arn}/feedback/*
+                Resource:
+                  - !Sub ${DataBucket.Arn}/queries/*
+                  - !Sub ${DataBucket.Arn}/feedback/*
+
+  # ---------- Query log (Athena) ----------
+  LogDatabase:
+    Type: AWS::Glue::Database
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: catalog for the queries/ and feedback/ tables; metadata only, the data stays in S3
+        must:
+          - name referenced by the AthenaNamedQuery resources and docs/aws-setup.md
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: eataly_ai
+        Description: Eataly AI query log and feedback (read with Athena workgroup eataly-ai)
+
+  QueriesTable:
+    Type: AWS::Glue::Table
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: one row per chat question, written by backend/events.py as s3://bucket/queries/YYYY/MM/DD/<message_id>.json
+        must:
+          - columns mirror the record built in backend/app.py; add a column here when the app adds a field
+          - partition projection on dt (yyyy/MM/dd) so new days need no MSCK REPAIR or crawler
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LogDatabase
+      TableInput:
+        Name: queries
+        Description: Every chat question with its search query, route, retrieved sources, answer and latency
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy/MM/dd
+          projection.dt.range: 2026/10/01,NOW
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          storage.location.template: !Sub s3://${DataBucket}/queries/${!dt}/
+        PartitionKeys:
+          - Name: dt
+            Type: string
+        StorageDescriptor:
+          Location: !Sub s3://${DataBucket}/queries/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "true"
+          Columns:
+            - {Name: created_at, Type: string}
+            - {Name: message_id, Type: string}
+            - {Name: conversation_id, Type: string}
+            - {Name: status, Type: string}
+            - {Name: question, Type: string}
+            - {Name: search_query, Type: string}
+            - {Name: route, Type: string}
+            - {Name: answer, Type: string}
+            - {Name: fallback, Type: boolean}
+            - {Name: citations, Type: "array<struct<document:string,page:string>>"}
+            - {Name: retrieved, Type: "array<struct<id:string,type:string,title:string,page:string,score:double>>"}
+            - {Name: history_turns, Type: int}
+            - {Name: topic, Type: string}
+            - {Name: latency_ms, Type: int}
+
+  FeedbackTable:
+    Type: AWS::Glue::Table
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: one row per rating click, written by backend/events.py as s3://bucket/feedback/YYYY/MM/DD/<message_id>.json; join to queries on message_id
+        must:
+          - columns mirror the record built in backend/app.py feedback()
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref LogDatabase
+      TableInput:
+        Name: feedback
+        Description: Thumbs up/down ratings with the question, answer and citations they refer to
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy/MM/dd
+          projection.dt.range: 2026/10/01,NOW
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          storage.location.template: !Sub s3://${DataBucket}/feedback/${!dt}/
+        PartitionKeys:
+          - Name: dt
+            Type: string
+        StorageDescriptor:
+          Location: !Sub s3://${DataBucket}/feedback/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "true"
+          Columns:
+            - {Name: created_at, Type: string}
+            - {Name: message_id, Type: string}
+            - {Name: rating, Type: string}
+            - {Name: comment, Type: string}
+            - {Name: conversation_id, Type: string}
+            - {Name: question, Type: string}
+            - {Name: answer, Type: string}
+            - {Name: citations, Type: "array<struct<document:string,page:string>>"}
+            - {Name: topic, Type: string}
+            - {Name: record_source, Type: string}
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: fixes the result location and encryption, and caps each query at 1 GB scanned as a cost guard
+    Properties:
+      Name: eataly-ai
+      Description: Query the Eataly AI question log and feedback
+      State: ENABLED
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: 1073741824
+        EngineVersion:
+          SelectedEngineVersion: AUTO
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${DataBucket}/athena-results/
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+      Tags:
+        - Key: app
+          Value: eataly-ai
+
+  RecentQuestionsQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: Recent questions (last 7 days)
+      Description: Every question with the search query, route, answer and latency
+      WorkGroup: !Ref AthenaWorkGroup
+      Database: !Ref LogDatabase
+      QueryString: |
+        SELECT created_at, question, search_query, route, status, fallback, latency_ms, answer
+        FROM queries
+        WHERE dt >= date_format(current_date - interval '7' day, '%Y/%m/%d')
+        ORDER BY created_at DESC
+        LIMIT 500;
+
+  RatedAnswersQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: Rated answers with retrieval
+      Description: Latest rating per answer, joined to what retrieval returned for it
+      WorkGroup: !Ref AthenaWorkGroup
+      Database: !Ref LogDatabase
+      QueryString: |
+        WITH latest AS (
+          SELECT *, row_number() OVER (PARTITION BY message_id ORDER BY created_at DESC) AS n
+          FROM feedback
+        )
+        SELECT f.created_at, f.rating, f.comment, f.question, f.answer,
+               q.search_query, q.route, q.retrieved
+        FROM latest f
+        LEFT JOIN queries q ON q.message_id = f.message_id
+        WHERE f.n = 1 AND f.rating IS NOT NULL  -- add: AND f.rating = 'down'
+        ORDER BY f.created_at DESC;
+
+  UnansweredQuestionsQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: Unanswered questions (last 30 days)
+      Description: Questions that got the ask-a-manager fallback or an error - gaps in the knowledge base
+      WorkGroup: !Ref AthenaWorkGroup
+      Database: !Ref LogDatabase
+      QueryString: |
+        SELECT created_at, question, search_query, route, status,
+               transform(retrieved, r -> r.title) AS retrieved_titles
+        FROM queries
+        WHERE dt >= date_format(current_date - interval '30' day, '%Y/%m/%d')
+          AND (fallback OR status = 'error')
+        ORDER BY created_at DESC;
+
+  DailyUsageQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: Daily usage
+      Description: Questions per day, fallback rate and median latency
+      WorkGroup: !Ref AthenaWorkGroup
+      Database: !Ref LogDatabase
+      QueryString: |
+        SELECT dt, count(*) AS questions,
+               round(avg(CASE WHEN fallback THEN 1.0 ELSE 0.0 END), 3) AS fallback_rate,
+               approx_percentile(latency_ms, 0.5) AS median_ms
+        FROM queries
+        GROUP BY dt
+        ORDER BY dt DESC;
 
   # ---------- CI/CD (GitHub Actions via OIDC) ----------
   GitHubOidcProvider:
@@ -317,7 +522,7 @@ Resources:
 
 Outputs:
   DataBucketName:
-    Description: Private bucket for documents/, feedback/, indexes/
+    Description: Private bucket for documents/, queries/, feedback/, athena-results/
     Value: !Ref DataBucket
     Export:
       Name: !Sub ${AWS::StackName}-DataBucketName
@@ -349,3 +554,9 @@ Outputs:
   GitHubDeployRoleArn:
     Description: Put this in the GitHub secret AWS_DEPLOY_ROLE_ARN
     Value: !GetAtt GitHubDeployRole.Arn
+  AthenaWorkGroupName:
+    Description: Pick this workgroup in the Athena console to see the saved queries
+    Value: !Ref AthenaWorkGroup
+  LogDatabaseName:
+    Description: Glue database with the queries and feedback tables
+    Value: !Ref LogDatabase

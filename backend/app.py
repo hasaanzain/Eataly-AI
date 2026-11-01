@@ -1,5 +1,5 @@
 # app.py — HTTP API + static front end for the Eataly staff assistant.
-# Run: uvicorn backend.app:app --host 0.0.0.0 --port 8501
+# Run locally: uvicorn backend.app:app --port 8000   (the Docker image serves on 8501)
 
 import json
 import logging
@@ -13,21 +13,23 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-import chatbot
-from backend import rag
-from backend.feedback import FeedbackStore
+from backend import ingest, rag
+from backend.events import EventStore
+from backend.retrieval import Retriever
 
+
+load_dotenv()  # local runs; in AWS the variables come from the task definition
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("eataly.api")
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 HISTORY_TURNS = 6
-RETRIEVAL_K = 4
 
 # Abuse/cost protection for an app with no login (per client IP, plus a daily ceiling).
 CHAT_LIMIT, CHAT_WINDOW_S = int(os.getenv("CHAT_LIMIT", "20")), 300
@@ -45,22 +47,31 @@ CONTENT_SECURITY_POLICY = (
 # ---------- In-process state ----------
 
 class KnowledgeBase:
-    """Built once per process in a background thread; /api/health reports 503 until ready."""
+    """Synced once per process in a background thread; /api/health reports 503 until ready.
+    The sync is incremental, so only new or changed sources are embedded on startup."""
 
     def __init__(self):
         self.status = "loading"
-        self.vectordb = None
+        self.retriever = None
         self.llm = None
+        self.rewriter = None
         self.files = {}
+        self.counts = {}
 
     def build(self):
         started = time.monotonic()
         try:
-            self.vectordb = chatbot.get_vectordb(chatbot.path)
-            self.files = {p.name: p for p in chatbot.get_doc_names(chatbot.path)}
-            self.llm = chatbot.get_llm()
+            config = ingest.IngestConfig.from_env()
+            ingest.sync_from_s3(config.kb_dir)
+            stores, report = ingest.sync(config)
+            self.retriever = Retriever(stores)
+            self.counts = {name: c["count"] for name, c in report["collections"].items()}
+            self.files = {p.name: p for p in ingest.discover(config.kb_dir) if p.suffix.lower() == ".pdf"}
+            self.llm = rag.chat_model()
+            self.rewriter = rag.rewrite_model()
             self.status = "ready"
-            log.info("knowledge base ready: %d documents in %.1fs", len(self.files), time.monotonic() - started)
+            log.info("knowledge base ready: %s, %d PDFs servable, in %.1fs",
+                     self.counts, len(self.files), time.monotonic() - started)
         except Exception:
             self.status = "error"
             log.exception("knowledge base build failed")
@@ -124,7 +135,7 @@ chat_limiter = RateLimiter(CHAT_LIMIT, CHAT_WINDOW_S)
 feedback_limiter = RateLimiter(FEEDBACK_LIMIT, FEEDBACK_WINDOW_S)
 daily_chats = DailyLimit(DAILY_CHAT_LIMIT)
 recent_answers = RecentAnswers()
-feedback_store = FeedbackStore()
+event_store = EventStore()
 
 
 @asynccontextmanager
@@ -160,6 +171,14 @@ def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def save_query(message_id, record):
+    # The query log must never break a chat, so failures are only logged.
+    try:
+        event_store.save("queries", message_id, record)
+    except Exception:
+        log.exception("query log failed message=%s", message_id)
+
+
 # ---------- Schemas ----------
 
 class Turn(BaseModel):
@@ -174,10 +193,20 @@ class ChatRequest(BaseModel):
     topic: str | None = Field(default=None, max_length=32)
 
 
+class Citation(BaseModel):
+    document: str = Field(max_length=200)
+    page: str | None = Field(default=None, max_length=20)
+
+
 class FeedbackRequest(BaseModel):
-    message_id: str = Field(max_length=64)
+    # Becomes part of the stored file name, so only plain ID characters are accepted.
+    message_id: str = Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     rating: Literal["up", "down"] | None
     comment: str | None = Field(default=None, max_length=1000)
+    # Sent by the browser as a fallback for answers given before a server restart.
+    question: str | None = Field(default=None, max_length=2000)
+    answer: str | None = Field(default=None, max_length=20000)
+    citations: list[Citation] = Field(default_factory=list, max_length=10)
 
 
 # ---------- Routes ----------
@@ -193,7 +222,7 @@ def home():
 
 @app.get("/api/health")
 def health():
-    body = {"status": kb.status, "documents": len(kb.files)}
+    body = {"status": kb.status, "documents": len(kb.files), "indexed": kb.counts}
     return JSONResponse(body, status_code=200 if kb.status == "ready" else 503)
 
 
@@ -213,31 +242,53 @@ def chat(req: ChatRequest, request: Request):
 
     def events():
         started = time.monotonic()
-        parts = []
+        parts, query, route, docs = [], None, None, []
+
+        def query_record(status, fallback, citations):
+            return {
+                "conversation_id": conversation_id,
+                "status": status,
+                "question": message,
+                "search_query": query,
+                "route": route,
+                "answer": "".join(parts),
+                "fallback": fallback,
+                "citations": citations,
+                "retrieved": rag.retrieval_record(docs),
+                "history_turns": len(history),
+                "topic": req.topic,
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            }
+
         try:
-            docs = rag.retrieve(kb.vectordb, rag.retrieval_query(message, history), k=RETRIEVAL_K)
+            query = rag.standalone_question(kb.rewriter, message, history)
+            route = kb.retriever.route(query)
+            docs = kb.retriever.retrieve(query, route)
             for text in rag.stream_answer(kb.llm, rag.build_messages(message, history, docs)):
                 parts.append(text)
                 yield sse("token", {"text": text})
             answer = "".join(parts)
             grounded = bool(answer.strip()) and not rag.is_fallback(answer)
             sources = rag.to_sources(docs) if grounded else []
+            citations = [{"document": s["title"], "page": s["page"]} for s in sources]
             yield sse("sources", {"sources": sources})
             recent_answers.put(message_id, {
                 "conversation_id": conversation_id,
                 "question": message,
                 "answer": answer,
-                "citations": [{"document": s["title"], "page": s["page"]} for s in sources],
+                "citations": citations,
                 "topic": req.topic,
             })
+            save_query(message_id, query_record("ok", not grounded, citations))
             yield sse("done", {"message_id": message_id, "conversation_id": conversation_id})
             log.info(
-                "chat ok conversation=%s message=%s ms=%d chars=%d sources=%d fallback=%s topic=%s",
-                conversation_id, message_id, (time.monotonic() - started) * 1000, len(answer),
+                "chat ok conversation=%s message=%s ms=%d chars=%d route=%s sources=%d fallback=%s topic=%s",
+                conversation_id, message_id, (time.monotonic() - started) * 1000, len(answer), route,
                 len(sources), not grounded, req.topic,
             )
         except Exception:
             log.exception("chat failed conversation=%s message=%s", conversation_id, message_id)
+            save_query(message_id, query_record("error", None, []))
             yield sse("error", {"message": "Something went wrong. Try again."})
 
     return StreamingResponse(
@@ -252,10 +303,20 @@ def feedback(req: FeedbackRequest, request: Request):
     if not feedback_limiter.allow(client_ip(request)):
         raise HTTPException(429, "Too many requests. Try again in a moment.")
     record = recent_answers.get(req.message_id)
-    if record is None:
+    if record is not None:
+        record = {**record, "record_source": "server"}
+    elif req.question and req.answer:
+        record = {
+            "conversation_id": None,
+            "question": req.question,
+            "answer": req.answer,
+            "citations": [c.model_dump() for c in req.citations],
+            "topic": None,
+            "record_source": "browser",
+        }
+    else:
         raise HTTPException(404, "Unknown message.")
-    feedback_store.save({
-        "message_id": req.message_id,
+    event_store.save("feedback", req.message_id, {
         "rating": req.rating,
         "comment": req.comment,
         **record,

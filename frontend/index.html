@@ -18,6 +18,7 @@
     --serif:"Fraunces", Georgia, serif; --sans:"Inter", system-ui, sans-serif;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}
   body{margin:0;background:var(--cream);color:var(--ink);font:400 15px/1.5 var(--sans)}
   button,textarea{font:inherit;color:inherit}
   button{cursor:pointer}
@@ -39,11 +40,6 @@
            border:1px solid rgba(246,241,231,.35);background:transparent;color:var(--cream);border-radius:12px;font-weight:500;font-size:14px}
   .btn-new:hover{background:rgba(246,241,231,.10)}
   .side-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--side-label);margin:0 0 8px 12px}
-  .topic-list{display:flex;flex-direction:column;gap:2px}
-  .topic{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 12px;border:0;border-radius:10px;
-         background:transparent;color:var(--cream);font-size:14px;font-weight:500;text-align:left;white-space:nowrap}
-  .topic:hover{background:rgba(246,241,231,.10)}
-  .topic-dot{width:8px;height:8px;border-radius:50%}
   .recent-list{display:flex;flex-direction:column;gap:2px}
   .recent-item{display:block;width:100%;min-height:44px;padding:10px 12px;border:0;border-radius:10px;background:transparent;
                color:var(--side-muted);font-size:14px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -81,10 +77,17 @@
         color:var(--ink-2);font-size:13px;text-decoration:none;max-width:100%}
   .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   a.chip:hover{background:var(--chip-hover);color:var(--green-dark)}
-  .feedback{display:flex;margin-left:auto}
+  .feedback{display:flex;align-items:center;gap:4px;margin-left:auto}
   .icon-btn{display:inline-grid;place-items:center;width:44px;height:36px;border:0;border-radius:10px;background:transparent;color:var(--muted)}
   .icon-btn:hover{background:var(--chip)}
-  .icon-btn[aria-pressed="true"]{color:var(--green)}
+  .icon-btn[aria-pressed="true"]{color:var(--green);background:var(--chip)}
+  .icon-btn[aria-pressed="true"] svg{fill:currentColor}
+  .feedback-status{font-size:12px;color:var(--muted);margin-right:4px}
+  .comment-box{display:flex;gap:8px;align-items:center}
+  .comment-box input{flex:1;min-width:0;min-height:44px;padding:0 14px;border:1px solid var(--line-strong);border-radius:12px;
+                     background:var(--paper);font:inherit;font-size:14px}
+  .btn-comment{min-height:44px;padding:0 16px;border:0;border-radius:12px;background:var(--green);color:var(--cream);font-size:14px;font-weight:500}
+  .btn-comment:hover{background:var(--green-dark)}
   .btn-retry{align-self:flex-start;min-height:44px;padding:0 16px;border:1px solid var(--line-strong);border-radius:12px;
              background:var(--paper);font-size:14px;font-weight:500}
   .btn-retry:hover{border-color:var(--green)}
@@ -121,10 +124,7 @@
     .sidebar{flex-direction:row;flex-wrap:wrap;align-items:center;gap:16px;padding:16px}
     .brand{flex:1}
     .btn-new{width:auto;padding:0 14px}
-    .topics{flex-basis:100%;min-width:0}
-    .topics .side-label,.recent{display:none}
-    .topic-list{flex-direction:row;overflow-x:auto;gap:8px;scrollbar-width:none}
-    .topic{border:1px solid rgba(246,241,231,.25)}
+    .recent{display:none}
     .main{height:100dvh}
     .header{padding:16px}
     .column{padding:16px}
@@ -142,10 +142,6 @@
       <div class="brand-sub"><span class="tricolore" aria-hidden="true"><i></i><i></i><i></i></span>Staff Assistant</div>
     </div>
     <button class="btn-new" id="newChat" type="button"></button>
-    <nav aria-label="Topics" class="topics">
-      <p class="side-label">Ask about</p>
-      <div class="topic-list" id="topics"></div>
-    </nav>
     <section aria-label="Recent conversations" class="recent" id="recentSection" hidden>
       <p class="side-label">Recent</p>
       <div class="recent-list" id="recent"></div>
@@ -189,12 +185,6 @@
     HISTORY_TURNS: 6
   };
   const KB_LABEL = "Menu · HR Handbook · Kitchen SOPs";
-  const TOPICS = [
-    { label: "Menu & allergens", color: "#E0473F", topic: "menu", q: "What allergens are in the Tagliatelle al Ragù?" },
-    { label: "Wine & pairings",  color: "#E6B85C", topic: "wine", q: "Wine pairing for Cacio e Pepe?" },
-    { label: "HR & policies",    color: "#9FD1B3", topic: "hr",   q: "How do I request time off?" },
-    { label: "Kitchen SOPs",     color: "#F6F1E7", topic: "sops", q: "Closing checklist for the pasta station" }
-  ];
   const SUGGESTIONS = [
     "What are the steps of service?",
     "How do I present a bottle of wine at the table?",
@@ -227,7 +217,7 @@
   };
   const $ = (id) => document.getElementById(id);
   const els = { messages: $("messages"), input: $("input"), send: $("send"), form: $("composer"),
-                topics: $("topics"), recent: $("recent"), recentSection: $("recentSection"), newChat: $("newChat") };
+                recent: $("recent"), recentSection: $("recentSection"), newChat: $("newChat") };
 
   // ---------- DOM helpers (model output only ever goes through textContent) ----------
   function el(tag, attrs = {}, ...children) {
@@ -351,12 +341,18 @@
     return { answer, sources, conversationId: payload.conversation_id || "c_mock", messageId: "m_" + Math.random().toString(36).slice(2, 10) };
   }
 
-  function sendFeedback(messageId, rating) {
-    if (CONFIG.USE_MOCK || !messageId) return;
-    fetch(CONFIG.API_BASE + CONFIG.FEEDBACK_PATH, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_id: messageId, rating }), credentials: "same-origin", keepalive: true
-    }).catch(() => {});
+  // Resolves true when the server stored the event. The question, answer and citations are sent too,
+  // so feedback still saves if the server restarted after the answer was given.
+  async function sendFeedback(msg, rating, comment = null) {
+    if (CONFIG.USE_MOCK) return true;
+    try {
+      const res = await fetch(CONFIG.API_BASE + CONFIG.FEEDBACK_PATH, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", keepalive: true,
+        body: JSON.stringify({ message_id: msg.id, rating, comment, question: msg.question, answer: msg.text,
+          citations: msg.sources.map(s => ({ document: s.title, page: s.page })) })
+      });
+      return res.ok;
+    } catch { return false; }
   }
 
   async function checkHealth() {
@@ -419,18 +415,43 @@
         meta.append(chip);
       }
     }
+    msg.dom.commentBox?.remove();
     if (msg.id) {
-      const feedback = el("span", { class: "feedback" });
-      for (const [rating, name, label] of [["up", "up", "Helpful"], ["down", "down", "Not helpful"]]) {
-        const btn = el("button", { class: "icon-btn", type: "button", "aria-label": label, "aria-pressed": String(msg.rating === rating) }, icon(name, 18));
-        btn.addEventListener("click", () => {
+      const status = el("span", { class: "feedback-status", role: "status" });
+      const feedback = el("span", { class: "feedback" }, status);
+      const commentInput = el("input", { type: "text", maxlength: "1000", "aria-label": "What was missing or incorrect?",
+        placeholder: "What was missing or incorrect? (optional)" });
+      const commentBox = el("form", { class: "comment-box", hidden: msg.rating !== "down" || !!msg.comment },
+        commentInput, el("button", { class: "btn-comment", type: "submit", text: "Send" }));
+      const buttons = [];
+      const save = async (rating, comment, done) => {
+        status.textContent = "Saving…";
+        const ok = await sendFeedback(msg, rating, comment);
+        status.textContent = ok ? done : "Couldn't save feedback. Try again.";
+        return ok;
+      };
+      for (const [rating, label] of [["up", "Helpful"], ["down", "Not helpful"]]) {
+        const btn = el("button", { class: "icon-btn", type: "button", "aria-label": label, "aria-pressed": String(msg.rating === rating) }, icon(rating, 18));
+        btn.addEventListener("click", async () => {
           msg.rating = msg.rating === rating ? null : rating;
-          feedback.querySelectorAll(".icon-btn").forEach(b => b.setAttribute("aria-pressed", String(b === btn && msg.rating === rating)));
-          sendFeedback(msg.id, msg.rating);
+          msg.comment = null;
+          buttons.forEach(b => b.setAttribute("aria-pressed", String(b === btn && msg.rating === rating)));
+          commentBox.hidden = msg.rating !== "down";
+          commentInput.value = "";
+          const ok = await save(msg.rating, null, msg.rating ? "Thanks for your feedback" : "Feedback removed");
+          if (ok && msg.rating === "down") commentInput.focus();
         });
-        feedback.append(btn);
+        buttons.push(btn); feedback.append(btn);
       }
+      commentBox.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = commentInput.value.trim();
+        if (!text) return;
+        if (await save("down", text, "Thanks, your comment was sent")) { msg.comment = text; commentBox.hidden = true; }
+      });
       meta.append(feedback);
+      meta.after(commentBox);
+      msg.dom.commentBox = commentBox;
     }
     meta.hidden = !meta.childElementCount;
   }
@@ -539,7 +560,7 @@
     const ensureBot = () => {
       if (botMsg) return botMsg;
       clearTimeout(timer); renderTyping(false);
-      botMsg = { role: "bot", text: "", sources: [], rating: null, id: null };
+      botMsg = { role: "bot", text: "", sources: [], rating: null, comment: null, id: null, question: text };
       state.messages.push(botMsg); renderBotMessage(botMsg);
       return botMsg;
     };
@@ -580,11 +601,6 @@
   // ---------- Wiring ----------
   els.newChat.append(icon("plus", 16), "New conversation");
   els.newChat.addEventListener("click", newConversation);
-  for (const t of TOPICS) {
-    const btn = el("button", { class: "topic", type: "button", onclick: () => send(t.q, t.topic) },
-      el("span", { class: "topic-dot", style: `background:${t.color}`, "aria-hidden": "true" }), el("span", { text: t.label }));
-    els.topics.append(btn);
-  }
   els.form.addEventListener("submit", (e) => {
     e.preventDefault();
     if (state.pending) abortRequest(); else send(els.input.value);

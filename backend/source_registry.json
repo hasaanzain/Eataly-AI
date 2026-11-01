@@ -1,0 +1,10 @@
+{
+  "_about": [
+    "Overrides for backend/ingest.py duplicate handling. Keys are PDF file names in the knowledge base.",
+    "A PDF named as source_file by JSON menu records is automatically represented by those records: kept for citation links, not embedded.",
+    "superseded: PDFs that must not be embedded (e.g. an older menu replaced by a newer one). Value = reason.",
+    "index_anyway: PDFs to embed even though JSON records name them as their source, or to accept after a needs_review warning."
+  ],
+  "superseded": {},
+  "index_anyway": []
+}

@@ -1,5 +1,6 @@
-# Runtime dependencies only.
-streamlit==1.54.0
+# Runtime dependencies for the FastAPI app (also installed in the Docker image).
+fastapi==0.160.0
+uvicorn==0.40.0
 python-dotenv==1.2.1
 langchain-core==1.2.13
 langchain-community==0.4.1
@@ -12,6 +13,3 @@ openai==2.21.0
 tiktoken==0.12.0
 pypdf==6.7.0
 boto3>=1.35,<2
-# Google Sheets query log (to be replaced by S3 feedback events)
-gspread>=6.0.0
-google-auth>=2.0.0
