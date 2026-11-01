@@ -41,10 +41,17 @@
   .btn-new:hover{background:rgba(246,241,231,.10)}
   .side-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--side-label);margin:0 0 8px 12px}
   .recent-list{display:flex;flex-direction:column;gap:2px}
-  .recent-item{display:block;width:100%;min-height:44px;padding:10px 12px;border:0;border-radius:10px;background:transparent;
+  .recent-row{display:flex;align-items:center;border-radius:10px}
+  .recent-row:hover{background:rgba(246,241,231,.06)}
+  .recent-row.active{background:rgba(246,241,231,.08)}
+  .recent-item{flex:1;min-width:0;min-height:44px;padding:10px 12px;border:0;border-radius:10px;background:transparent;
                color:var(--side-muted);font-size:14px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .recent-item:hover{background:rgba(246,241,231,.06)}
-  .recent-item[aria-current="true"]{background:rgba(246,241,231,.08);color:#E4ECE6}
+  .recent-item[aria-current="true"]{color:#E4ECE6}
+  .recent-delete{display:grid;place-items:center;width:36px;height:36px;margin-right:4px;border:0;border-radius:8px;
+                 background:transparent;color:var(--side-muted);opacity:0}
+  .recent-row:hover .recent-delete,.recent-row:has(:focus-visible) .recent-delete{opacity:1}
+  .recent-delete:hover{background:rgba(246,241,231,.12);color:var(--cream)}
+  @media (hover: none){.recent-delete{opacity:1}}
 
   /* Main */
   .main{flex:999 1 560px;min-width:0;height:100vh;display:flex;flex-direction:column}
@@ -203,7 +210,8 @@
     stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
     file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
     up: '<path d="M7 10v11H4V10zM7 10l4-7a3 3 0 0 1 3 3v4h5a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 17.6 21H7"/>',
-    down: '<path d="M17 14V3h3v11zM17 14l-4 7a3 3 0 0 1-3-3v-4H5a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 6.4 3H17"/>'
+    down: '<path d="M17 14V3h3v11zM17 14l-4 7a3 3 0 0 1-3-3v-4H5a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 6.4 3H17"/>',
+    trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>'
   };
 
   const state = {
@@ -213,7 +221,7 @@
     controller: null,
     stopped: false,
     activeKey: null,
-    conversations: []      // [{key, title, conversationId, messages}] for this tab; titles persist
+    conversations: []      // [{key, title, conversationId, messages}] for this tab; titles survive a refresh only
   };
   const $ = (id) => document.getElementById(id);
   const els = { messages: $("messages"), input: $("input"), send: $("send"), form: $("composer"),
@@ -490,18 +498,35 @@
   }
 
   // ---------- Conversations ----------
+  // Recent titles live in sessionStorage: a refresh keeps them, but a new visitor, tab or browser session starts empty.
   const RECENT_KEY = "eataly.recentTitles";
-  function loadTitles() { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } }
+  try { localStorage.removeItem(RECENT_KEY); } catch {}   // titles an earlier version kept on the device indefinitely
+  function loadTitles() { try { return JSON.parse(sessionStorage.getItem(RECENT_KEY)) || []; } catch { return []; } }
   function saveTitles() {
-    try { localStorage.setItem(RECENT_KEY, JSON.stringify(state.conversations.slice(0, 8).map(c => ({ key: c.key, title: c.title })))); } catch {}
+    try { sessionStorage.setItem(RECENT_KEY, JSON.stringify(state.conversations.slice(0, 8).map(c => ({ key: c.key, title: c.title })))); } catch {}
   }
   function currentConversation() { return state.conversations.find(c => c.key === state.activeKey); }
 
   function renderRecent() {
-    els.recent.replaceChildren(...state.conversations.slice(0, 8).map(c =>
-      el("button", { class: "recent-item", type: "button", text: c.title, title: c.title,
-        "aria-current": c.key === state.activeKey ? "true" : null, onclick: () => openConversation(c) })));
+    els.recent.replaceChildren(...state.conversations.slice(0, 8).map(c => {
+      const active = c.key === state.activeKey;
+      return el("div", { class: active ? "recent-row active" : "recent-row" },
+        el("button", { class: "recent-item", type: "button", text: c.title, title: c.title,
+          "aria-current": active ? "true" : null, onclick: () => openConversation(c) }),
+        el("button", { class: "recent-delete", type: "button", title: "Delete conversation",
+          "aria-label": `Delete conversation: ${c.title}`, onclick: () => deleteConversation(c) }, icon("trash", 16)));
+    }));
     els.recentSection.hidden = !state.conversations.length;
+  }
+
+  function deleteConversation(c) {
+    const index = state.conversations.indexOf(c);
+    if (index < 0) return;
+    state.conversations.splice(index, 1); saveTitles();
+    if (c.key === state.activeKey) newConversation(); else renderRecent();
+    // Keep keyboard users in the list: focus the next conversation, or "New conversation" when none are left.
+    const items = els.recent.querySelectorAll(".recent-item");
+    (items[Math.min(index, items.length - 1)] || els.newChat).focus();
   }
 
   function openConversation(c) {

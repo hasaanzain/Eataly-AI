@@ -78,6 +78,11 @@ def test_duplicate_menu_items_cited_once():
     assert len(rag.to_sources([menu_doc(), menu_doc()])) == 1
 
 
+def test_at_most_two_sources_in_retrieval_order():
+    docs = [menu_doc(name="Carbonara Classica"), menu_doc(name="Cacio e Pepe"), pdf_doc(), menu_doc(name="Amatriciana")]
+    assert [s["title"].split(" · ")[0] for s in rag.to_sources(docs)] == ["Carbonara Classica", "Cacio e Pepe"]
+
+
 def test_context_labels_each_source():
     messages = rag.build_messages("question", [], [menu_doc(), pdf_doc()])
     context = messages[0].content

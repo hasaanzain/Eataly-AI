@@ -124,11 +124,16 @@ def is_fallback(answer):
     return "beyond the scope of my knowledge" in answer.lower()
 
 
-def to_sources(docs, snippet_chars=200):
-    # One chip per document page, in retrieval order. Titles and pages come only from
-    # loader metadata; nothing is invented.
+MAX_SOURCES = 2
+
+
+def to_sources(docs, snippet_chars=200, limit=MAX_SOURCES):
+    # One chip per document page, in retrieval order, at most `limit` (the answer still uses every
+    # retrieved document). Titles and pages come only from loader metadata; nothing is invented.
     sources, seen = [], set()
     for doc in docs:
+        if len(sources) >= limit:
+            break
         if doc.metadata.get("source_type") == "menu_record":
             source = menu_source(doc, snippet_chars)
             if (source["title"], source["page"]) not in seen:
