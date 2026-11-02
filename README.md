@@ -61,7 +61,7 @@ http://eataly-LoadB-Im6ruFOAYdDe-1295347466.ca-central-1.elb.amazonaws.com
 │   ├── events.py         # question log + feedback records to S3 (or ./logs locally)
 │   └── source_registry.json  # duplicate-handling overrides (superseded / index_anyway PDFs)
 ├── frontend/index.html   # Il Mercato chat UI (single file, no build step)
-├── eataly_ai_knowledge_base/  # PDFs + eataly_menu_enriched.json
+├── eataly_ai_knowledge_base/  # PDFs + eataly_menu_enriched.json (not in git; copy of S3 documents/)
 ├── evals/                # 50-question golden set + run_evals.py
 ├── tests/                # pytest suite (offline: fake embeddings, synthetic PDFs)
 ├── docs/                 # AWS setup, menu data notes, original build spec and UI guide
@@ -78,6 +78,7 @@ http://eataly-LoadB-Im6ruFOAYdDe-1295347466.ca-central-1.elb.amazonaws.com
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env      # add OPENAI_API_KEY (and LANGSMITH_API_KEY)
+aws s3 sync s3://<bucket>/documents/ eataly_ai_knowledge_base/ --profile hasaan   # documents are not in git
 uvicorn backend.app:app --port 8000
 ```
 
