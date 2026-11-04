@@ -1,3 +1,5 @@
+# Hasaan Mohsin
+
 # rag.py — models, follow-up rewriting, prompt and source packaging for the HTTP API.
 # Indexing lives in ingest.py and collection search in retrieval.py.
 
